@@ -63,14 +63,14 @@ python3 -m ransomware.encryptor
 ls -la lab/test_files
 ```
 
-![Cifragem simulada](images/03_encryptor.png)
+![Cifragem simulada](images/03_ransomware_encrypytor.png)
 
 ```bash
 python3 -m ransomware.decrypto
 ls -la lab/test_files
 ```
 
-![Descriptografia e validação de integridade](images/04_decrypto.png)
+![Descriptografia e validação de integridade](images/04_ransomware_decrypto.png)
 
 ### 2. Módulo de Keylogger Simulado
 
