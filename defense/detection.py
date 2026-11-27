@@ -1,107 +1,127 @@
 import json
 from pathlib import Path
+
 from defense.indicators import extrair_indicadores
 from ransomware.file_generator import LAB_TARGET_DIR
-from ransomware.key_manager import LOG_FILE, registrar_evento
+from ransomware.key_manager import LOG_FILE
+
+
+MITRE_POR_REGRA = {
+    "DET-RANSOM-001": {
+        "tatica": "Impact",
+        "tatica_id": "TA0040",
+        "tecnica": "Data Encrypted for Impact",
+        "tecnica_id": "T1486",
+    },
+    "DET-KEYLOG-001": {
+        "tatica": "Collection",
+        "tatica_id": "TA0009",
+        "tecnica": "Input Capture (GUI Input Capture)",
+        "tecnica_id": "T1056.002",
+    },
+    "DET-PERSIST-001": {
+        "tatica": "Persistence",
+        "tatica_id": "TA0003",
+        "tecnica": "Boot or Logon Autostart Execution",
+        "tecnica_id": "T1547",
+    },
+    "DET-EXFIL-001": {
+        "tatica": "Exfiltration",
+        "tatica_id": "TA0010",
+        "tecnica": "Exfiltration Over Alternative Protocol",
+        "tecnica_id": "T1048",
+    },
+}
 
 
 def avaliar_comportamentos(
     arquivo_log: Path = LOG_FILE,
     diretorio_alvo: Path = LAB_TARGET_DIR,
 ) -> dict:
-    """Aplica regras heurísticas/comportamentais sobre os indicadores do laboratório."""
+    """Aplica regras heurísticas sobre os indicadores extraídos do laboratório."""
     indicadores = extrair_indicadores(arquivo_log=arquivo_log, diretorio_alvo=diretorio_alvo)
-    por_acao = indicadores.get("por_acao", {})
-    artefactos = indicadores.get("artefactos", {})
-    destinos_rede = indicadores.get("destinos_rede_simulados", [])
-    total_teclas = indicadores.get("total_teclas_registadas_em_sessoes", 0)
-
     alertas: list[dict] = []
 
-    # Regra 1: Cifragem de arquivos e/ou artefato de resgate
-    cifragens = por_acao.get("criptografar_arquivo_sucesso", 0)
-    nota_presente = bool(artefactos.get("nota_resgate_presente", False))
-    if cifragens > 0 or nota_presente:
-        severidade = "ALTA" if (cifragens > 0 and nota_presente) else "MEDIA"
+    arquivos_cifrados_log = indicadores.get("arquivos_cifrados_no_log", 0)
+    nota_resgate = indicadores.get("nota_resgate_presente", False)
+    arquivos_enc_atuais = indicadores.get("arquivos_enc_atuais", [])
+
+    if arquivos_cifrados_log > 0 or nota_resgate or len(arquivos_enc_atuais) > 0:
         alertas.append(
             {
                 "regra_id": "DET-RANSOM-001",
-                "severidade": severidade,
+                "severidade": "ALTA",
                 "titulo": "Comportamento compatível com cifragem simulada e nota de resgate",
+                "mitre_attack": MITRE_POR_REGRA["DET-RANSOM-001"],
                 "evidencias": {
-                    "arquivos_cifrados_no_log": cifragens,
-                    "nota_resgate_presente": nota_presente,
-                    "arquivos_enc_atuais": artefactos.get("ficheiros_cifrados_enc", []),
+                    "arquivos_cifrados_no_log": arquivos_cifrados_log,
+                    "nota_resgate_presente": nota_resgate,
+                    "arquivos_enc_atuais": arquivos_enc_atuais,
                 },
             }
         )
 
-    # Regra 2: Captura de entradas de teclado em janela de teste
-    sessoes_encerradas = por_acao.get("sessao_captura_encerrada", 0)
-    if total_teclas > 0 or sessoes_encerradas > 0:
+    sessoes_encerradas = indicadores.get("sessoes_keylogger_encerradas", 0)
+    total_teclas = indicadores.get("total_teclas_registadas_em_sessoes", 0)
+    log_teclas = indicadores.get("log_teclas_presente", False)
+
+    if sessoes_encerradas > 0 or total_teclas > 0 or log_teclas:
         alertas.append(
             {
                 "regra_id": "DET-KEYLOG-001",
                 "severidade": "MEDIA",
                 "titulo": "Registro de entradas de teclado observado em sessão simulada",
+                "mitre_attack": MITRE_POR_REGRA["DET-KEYLOG-001"],
                 "evidencias": {
                     "sessoes_encerradas": sessoes_encerradas,
                     "total_teclas_sessoes": total_teclas,
-                    "log_teclas_presente": artefactos.get("artefactos_logs", {}).get(
-                        "keylogger_simulado_txt", False
-                    ),
+                    "log_teclas_presente": log_teclas,
                 },
             }
         )
 
-    # Regra 3: Simulação de persistência
-    persistencias = por_acao.get("simular_persistencia_sucesso", 0)
-    if persistencias > 0 or artefactos.get("artefactos_logs", {}).get("sim_persistence_json", False):
+    acoes_persistencia = indicadores.get("acoes_persistencia_log", 0)
+    arquivo_persistencia = indicadores.get("arquivo_sim_persistence_presente", False)
+
+    if acoes_persistencia > 0 or arquivo_persistencia:
         alertas.append(
             {
                 "regra_id": "DET-PERSIST-001",
                 "severidade": "BAIXA",
                 "titulo": "Artefato/ação de persistência simulada detectado",
+                "mitre_attack": MITRE_POR_REGRA["DET-PERSIST-001"],
                 "evidencias": {
-                    "acoes_persistencia_log": persistencias,
-                    "arquivo_sim_persistence": artefactos.get("artefactos_logs", {}).get(
-                        "sim_persistence_json", False
-                    ),
+                    "acoes_persistencia_log": acoes_persistencia,
+                    "arquivo_sim_persistence": arquivo_persistencia,
                 },
             }
         )
 
-    # Regra 4: Transmissão/exfiltração simulada pela rede
-    envios_ok = por_acao.get("simular_transmissao_sucesso", 0)
-    envios_sem_receptor = por_acao.get("simular_transmissao_sem_receptor", 0)
-    if envios_ok > 0 or envios_sem_receptor > 0 or destinos_rede:
-        severidade_rede = "ALTA" if envios_ok > 0 else "MEDIA"
+    transmissoes_sucesso = indicadores.get("transmissoes_rede_sucesso", 0)
+    transmissoes_sem_receptor = indicadores.get("transmissoes_rede_sem_receptor", 0)
+    destinos = indicadores.get("destinos_rede_simulados", [])
+
+    if transmissoes_sucesso > 0 or transmissoes_sem_receptor > 0 or len(destinos) > 0:
         alertas.append(
             {
                 "regra_id": "DET-EXFIL-001",
-                "severidade": severidade_rede,
+                "severidade": "ALTA",
                 "titulo": "Tentativa ou ocorrência de transmissão de dados simulada em rede",
+                "mitre_attack": MITRE_POR_REGRA["DET-EXFIL-001"],
                 "evidencias": {
-                    "transmissoes_sucesso": envios_ok,
-                    "transmissoes_sem_receptor": envios_sem_receptor,
-                    "destinos_observados": destinos_rede,
+                    "transmissoes_sucesso": transmissoes_sucesso,
+                    "transmissoes_sem_receptor": transmissoes_sem_receptor,
+                    "destinos_observados": destinos,
                 },
             }
         )
 
-    resultado = {
+    return {
         "total_alertas": len(alertas),
         "alertas": alertas,
     }
 
-    registrar_evento(
-        modulo="defense.detection",
-        acao="avaliacao_comportamental_concluida",
-        detalhes={"total_alertas": len(alertas)},
-    )
-    return resultado
-
 
 if __name__ == "__main__":
-    relatorio_deteccao = avaliar_comportamentos()
-    print(json.dumps(relatorio_deteccao, indent=2, ensure_ascii=False))
+    resultado = avaliar_comportamentos()
+    print(json.dumps(resultado, indent=2, ensure_ascii=False))

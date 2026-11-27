@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+
 from defense.detection import avaliar_comportamentos
 from defense.indicators import extrair_indicadores
 from ransomware.file_generator import LAB_TARGET_DIR, LOGS_DIR
@@ -51,17 +52,27 @@ def gerar_relatorio_defensivo(
     diretorio_alvo: Path = LAB_TARGET_DIR,
     arquivo_saida: Path = DEFAULT_REPORT_FILE,
 ) -> dict:
-    """Consolida indicadores, alertas e recomendações defensivas em um relatório JSON."""
+    """Consolida indicadores, alertas, mapeamento MITRE e recomendações em um relatório JSON."""
     indicadores = extrair_indicadores(arquivo_log=arquivo_log, diretorio_alvo=diretorio_alvo)
     deteccao = avaliar_comportamentos(arquivo_log=arquivo_log, diretorio_alvo=diretorio_alvo)
     alertas = deteccao.get("alertas", [])
 
     recomendacoes: list[str] = []
+    tecnicas_mitre: list[dict] = []
+    vistas_mitre: set[tuple[str, str]] = set()
+
     for alerta in alertas:
         regra_id = alerta.get("regra_id", "")
         for medida in RECOMENDACOES_POR_REGRA.get(regra_id, []):
             if medida not in recomendacoes:
                 recomendacoes.append(medida)
+
+        mitre = alerta.get("mitre_attack")
+        if mitre:
+            chave = (mitre.get("tecnica_id", ""), mitre.get("tecnica", ""))
+            if chave not in vistas_mitre:
+                vistas_mitre.add(chave)
+                tecnicas_mitre.append(mitre)
 
     relatorio = {
         "gerado_em_utc": datetime.now(timezone.utc).isoformat(),
@@ -71,6 +82,7 @@ def gerar_relatorio_defensivo(
             "total_alertas": deteccao.get("total_alertas", 0),
             "destinos_rede_observados": indicadores.get("destinos_rede_simulados", []),
             "total_teclas_sessoes": indicadores.get("total_teclas_registadas_em_sessoes", 0),
+            "tecnicas_mitre_observadas": tecnicas_mitre,
         },
         "indicadores": indicadores,
         "deteccao": deteccao,
@@ -91,6 +103,7 @@ def gerar_relatorio_defensivo(
             "arquivo_relatorio": destino_seguro.name,
             "nivel_risco_geral": relatorio["nivel_risco_geral"],
             "total_alertas": len(alertas),
+            "tecnicas_mitre": [t.get("tecnica_id") for t in tecnicas_mitre],
         },
     )
     return relatorio
@@ -100,6 +113,9 @@ if __name__ == "__main__":
     relatorio_final = gerar_relatorio_defensivo()
     print(f"Nível de risco geral: {relatorio_final['nivel_risco_geral']}")
     print(f"Total de alertas: {relatorio_final['resumo_executivo']['total_alertas']}")
+    print("Técnicas MITRE ATT&CK observadas:")
+    for tec in relatorio_final["resumo_executivo"]["tecnicas_mitre_observadas"]:
+        print(f" - [{tec['tecnica_id']}] {tec['tecnica']} ({tec['tatica']} / {tec['tatica_id']})")
     print("Recomendações:")
     for rec in relatorio_final["recomendacoes_mitigacao"]:
         print(f" - {rec}")
